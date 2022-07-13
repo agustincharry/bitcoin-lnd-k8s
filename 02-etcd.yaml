@@ -1,0 +1,110 @@
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: etcd-pv
+  labels:
+    app: etcd
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/btc/etcd"
+
+
+---
+
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: etcd-pvc
+  labels:
+    app: etcd
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+
+---
+
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: etcd
+  labels:
+    app: etcd
+spec:
+  selector:
+    matchLabels:
+      app: etcd
+  serviceName: etcd
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: etcd
+    spec:
+      terminationGracePeriodSeconds: 10
+
+      volumes:
+      - name: etcd-storage
+        persistentVolumeClaim:
+          claimName: etcd-pvc
+
+      initContainers:
+      - name: config
+        image: busybox
+        command: ['sh', '-c', 'chown -R 1001:1001 /data']
+        volumeMounts:
+        - name: etcd-storage
+          mountPath: "/data"
+
+      containers:
+      - name: etcd
+        image: bitnami/etcd:3.5
+        ports:
+        - containerPort: 2379
+        - containerPort: 2380
+        env:
+        - name: ALLOW_NONE_AUTHENTICATION
+          value: 'yes'
+        - name: ETCD_ADVERTISE_CLIENT_URLS
+          value: http://etcd-service:2379
+        - name: ETCD_LISTEN_CLIENT_URLS
+          value: https://0.0.0.0:2379
+        - name: ETCD_AUTO_TLS
+          value: 'true'
+        - name: ETCD_MAX_TXN_OPS
+          value: '16384'
+        - name: ETCD_MAX_REQUEST_BYTES
+          value: '104857600'
+
+        volumeMounts:
+        - name: etcd-storage
+          mountPath: "/bitnami/etcd/data/fixtures/client"
+
+
+---
+
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-service
+spec:
+  selector:
+    app: etcd
+  ports:
+    - name: http
+      protocol: TCP
+      port: 2379
+      targetPort: 2379

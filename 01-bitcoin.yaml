@@ -1,0 +1,150 @@
+#-------------------------------------BITCOIN CONFIG---------------------------
+#
+# Config file used to setup Bitcoin node.
+# zmqpubrawblock, zmqpubrawtx must be 0.0.0.0 to allow connections from other pods.
+#
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bitcoin-conf
+  labels:
+    app: bitcoind-node
+data:
+  bitcoin.conf: |
+    server=1
+    daemon=0
+    debug=mempool
+    debug=rpc
+
+    prune=550
+    regtest=1
+
+    rpcauth=a:af574724b7b271754b07bbc27f63a840$96c4ca8cc42707c84b053787821c12769aa396644c185c34e398b37e15c1e469
+    zmqpubrawblock=tcp://0.0.0.0:28332
+    zmqpubrawtx=tcp://0.0.0.0:28333
+    fallbackfee=0.00001
+
+
+---
+
+#-----------------------------------PERSISTENT VOLUME--------------------------
+#
+# Volume used to store Bitcoin data.
+#
+# ONLY USED IN LOCAL ENVIRONMENTS!!
+# In a production environment the StatefulSet should create the PersistentVolume automatically.
+#
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: bitcoind-pv
+  labels:
+    app: bitcoind-node
+spec:
+  storageClassName: local-storage # ----------> This can be changed!!
+  capacity:
+    storage: 15Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/btc/btc"
+
+
+---
+
+#-------------------------------------STATEFUL SET-----------------------------
+#
+# This is the main deployment.
+# volumeClaimTemplate is used to create the PersistentVolumeClaim automatically.
+# initContainer is used to copy bitcoin config file to the correct path.
+#
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bitcoind-node
+  labels:
+    app: bitcoind-node
+spec:
+  selector:
+    matchLabels:
+      app: bitcoind-node
+  serviceName: bitcoind
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: bitcoind-node
+    spec:
+      terminationGracePeriodSeconds: 10
+      
+      volumes:
+      - name: bitcoin-conf
+        configMap:
+          name: bitcoin-conf
+
+      initContainers:
+        - name: config
+          image: busybox
+          command: ['sh', '-c', 'cp /conf/* /data/']
+          volumeMounts:
+            - name: bitcoin-data
+              mountPath: /data
+            - name: bitcoin-conf
+              mountPath: /conf
+
+      containers:
+        - name: bitcoind-node
+          image: kylemanna/bitcoind
+          ports:
+          - containerPort: 8332
+          - containerPort: 28332
+          - containerPort: 28333
+
+          volumeMounts:
+          - name: bitcoin-data
+            mountPath: "/bitcoin/.bitcoin"
+
+  volumeClaimTemplates:
+  - metadata:
+      name: bitcoin-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: "local-storage" # ----------> This can be changed!!
+      resources:
+        requests:
+          storage: 15Gi
+
+
+---
+
+#-----------------------------------------SERVICE------------------------------
+#
+# Used to expose DNS and ports.
+#
+# Expose these endpoints
+# bitcoind-node-0.bitcoind.default.svc.cluster.local
+# bitcoind-service
+#
+apiVersion: v1
+kind: Service
+metadata:
+  name: bitcoind-service
+  labels:
+    app: bitcoind-node
+spec:
+  clusterIP: None
+  selector:
+    app: bitcoind-node
+  ports:
+    - name: btc
+      protocol: TCP
+      port: 8332
+      targetPort: 8332
+    - name: zmqpubrawblock
+      protocol: TCP
+      port: 28332
+      targetPort: 28332
+    - name: zmqpubrawtx
+      protocol: TCP
+      port: 28333
+      targetPort: 28333

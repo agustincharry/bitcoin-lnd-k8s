@@ -1,0 +1,102 @@
+#-------------------------------------THUNDERHUB CONFIG------------------------
+#
+# Config file used to setup Thunderhub and connect to LND node.
+#
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thunderhub-conf
+  labels:
+    app: thunderhub
+data:
+  config.yaml: |
+    masterPassword: "123"
+    accounts:
+      - name: "Account 1"
+        serverUrl: "lnd-node-service:10009"
+        macaroonPath: "/app/lnd/data/chain/bitcoin/regtest/admin.macaroon"
+        certificatePath: "/app/lnd/tls.cert"
+        password: "456"
+
+
+---
+
+#--------------------------------------DEPLOYMENT------------------------------
+#
+# This is the main deployment.
+# Uses the volumes to config the LND certs.
+# initContainer is used to setup the correct permissions.
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thunderhub
+  labels:
+    app: thunderhub
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: thunderhub
+  template:
+    metadata:
+      labels:
+        app: thunderhub
+    spec:
+
+      volumes:
+      - name: thunderhub-conf
+        configMap:
+          name: thunderhub-conf
+      - name: lnd-pv-storage
+        persistentVolumeClaim:
+          claimName: lnd-pvc
+
+      initContainers:
+      - name: config
+        image: busybox
+        command: ['sh', '-c', 'chown -R 1000 /conf']
+        volumeMounts:
+          - name: lnd-pv-storage
+            mountPath: /conf
+
+      containers:
+      - name: thunderhub
+        image: apotdevin/thunderhub:v0.13.10
+        ports:
+        - containerPort: 3000
+        env:
+        - name: ACCOUNT_CONFIG_PATH
+          value: "/app/config.yaml"
+
+        volumeMounts:
+        - name: lnd-pv-storage
+          mountPath: "/app/lnd"
+        - name: thunderhub-conf
+          mountPath: "/app/config.yaml"
+          subPath: "config.yaml"
+
+
+---
+
+#-----------------------------------------SERVICE------------------------------
+#
+# Used to expose DNS and ports.
+#
+# Expose this endpoints
+# thunderhub-service
+#
+apiVersion: v1
+kind: Service
+metadata:
+  name: thunderhub-service
+spec:
+  type: NodePort
+  selector:
+    app: thunderhub
+  ports:
+    - name: http
+      protocol: TCP
+      port: 3000
+      targetPort: 3000
+      nodePort: 30030

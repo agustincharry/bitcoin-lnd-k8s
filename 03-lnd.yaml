@@ -1,0 +1,216 @@
+#----------------------------------------LND CONFIG----------------------------
+#
+# Config file used to setup LND node.
+# This config use etcd database to configure LND in cluster mode.
+# etcd certificates are mounted on a volume in the path /etcd/
+#
+# NOTE: The first time you deploy LND, you need to comment "wallet-unlock-password-file" line
+#
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lnd-conf
+  labels:
+    app: lnd-node
+data:
+  lnd.conf: |
+    bitcoin.active=true
+    bitcoin.regtest=true
+    debuglevel=debug
+    bitcoin.node=bitcoind
+    #wallet-unlock-password-file=/root/.lnd/lnd-pass.conf
+
+    bitcoind.rpcuser=a
+    bitcoind.rpcpass=b
+    bitcoind.rpchost=bitcoind-service:8332
+    
+    bitcoind.zmqpubrawblock=tcp://bitcoind-service:28332
+    bitcoind.zmqpubrawtx=tcp://bitcoind-service:28333
+
+    restlisten=0.0.0.0:8080
+    rpclisten=0.0.0.0:10009
+    listen=0.0.0.0:9735
+    tlsextraip=0.0.0.0
+    tlsextradomain=lnd-node-service
+
+
+    db.backend=etcd
+    db.etcd.host=etcd-service:2379
+    db.etcd.cert_file=/etcd/cert.pem
+    db.etcd.key_file=/etcd/key.pem
+    db.etcd.insecure_skip_verify=true
+    cluster.enable-leader-election=true
+    cluster.leader-elector=etcd
+    cluster.etcd-election-prefix=cluster-leader
+
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lnd-pass
+  labels:
+    app: lnd-node
+data:
+  lnd-pass.conf: |
+    12345678
+
+
+---
+
+#-----------------------------------PERSISTENT VOLUME--------------------------
+#
+# Volume used to store LND data.
+#
+# In the production environment, this setting must be changed to use a file system provider, such as EFS.
+#
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: lnd-pv
+  labels:
+    app: lnd-node
+spec:
+  storageClassName: local-storage # ----------> This can be changed!!
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/btc/lnd"
+
+
+---
+
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lnd-pvc
+  labels:
+    app: lnd-node
+spec:
+  storageClassName: local-storage # ----------> This can be changed!!
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+
+---
+
+#--------------------------------------DEPLOYMENT------------------------------
+#
+# This is the main deployment.
+# This deployment uses the etcd volume to config the certificates for the connection.
+# readinessProbe is very important to know which node is the leader.
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lnd-node
+  labels:
+    app: lnd-node
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: lnd-node
+  template:
+    metadata:
+      labels:
+        app: lnd-node
+    spec:
+
+      volumes:
+      - name: lnd-conf
+        configMap:
+          name: lnd-conf
+      - name: lnd-pass
+        configMap:
+          name: lnd-pass
+          defaultMode: 0400
+      - name: lnd-pv-storage
+        persistentVolumeClaim:
+          claimName: lnd-pvc
+      - name: etcd-storage
+        persistentVolumeClaim:
+          claimName: etcd-pvc
+
+      containers:
+      - name: lnd-node
+        image: lightninglabs/lnd:v0.14.3-beta.rc1
+        ports:
+        - containerPort: 8080
+        - containerPort: 10009
+        - containerPort: 9735
+
+        readinessProbe:
+          exec:
+            command:
+            - "/bin/sh"
+            - "-c"
+            - "set -e; set -o pipefail; curl -s -k -o - https://localhost:8080/v1/state | jq .'state' | grep -E 'NON_EXISTING|LOCKED|UNLOCKED|RPC_ACTIVE|SERVER_ACTIVE'"
+
+        volumeMounts:
+        - name: lnd-pv-storage
+          mountPath: "/root/.lnd"
+        - name: lnd-conf
+          mountPath: "/root/.lnd/lnd.conf"
+          subPath: "lnd.conf"
+        - name: lnd-pass
+          mountPath: "/root/.lnd/lnd-pass.conf"
+          subPath: "lnd-pass.conf"
+        - name: etcd-storage
+          mountPath: "/etcd/"
+
+
+---
+
+#-----------------------------------------SERVICE------------------------------
+#
+# Used to expose DNS and ports.
+#
+# Expose these endpoints
+# lnd-node-service
+# lnd-public-service
+#
+apiVersion: v1
+kind: Service
+metadata:
+  name: lnd-node-service
+spec:
+  selector:
+    app: lnd-node
+  ports:
+    - name: rest
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+    - name: grpc
+      protocol: TCP
+      port: 10009
+      targetPort: 10009
+    - name: traffic
+      protocol: TCP
+      port: 9735
+      targetPort: 9735
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: lnd-public-service
+spec:
+  type: NodePort
+  selector:
+    app: lnd-node
+  ports:
+    - name: traffic
+      protocol: TCP
+      port: 9735
+      targetPort: 9735
+      nodePort: 30020

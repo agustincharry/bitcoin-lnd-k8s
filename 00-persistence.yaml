@@ -1,0 +1,11 @@
+#-------------------------------------STORAGE CLASS----------------------------
+#
+# StorageClass used by StatefulSets to scale the VolumeClaims automatically.
+# This config is used in a local environment!
+#
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-storage
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer

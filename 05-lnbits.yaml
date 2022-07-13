@@ -1,0 +1,175 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lnbits-conf
+data:
+  .env: |
+    QUART_APP=lnbits.app:create_app()
+    QUART_ENV=development
+    QUART_DEBUG=true
+
+    HOST=127.0.0.1
+    PORT=5000
+
+    LNBITS_ALLOWED_USERS=""
+    LNBITS_ADMIN_USERS=""
+    # Extensions only admin can access
+    LNBITS_ADMIN_EXTENSIONS="ngrok"
+    LNBITS_DEFAULT_WALLET_NAME="LNbits wallet"
+
+    LNBITS_AD_SPACE="" # csv ad image filepaths or urls, extensions can choose to honor
+    LNBITS_HIDE_API=false # Hides wallet api, extensions can choose to honor
+
+    # Disable extensions for all users, use "all" to disable all extensions
+    LNBITS_DISABLED_EXTENSIONS="amilk"
+
+    # Database: to use SQLite, specify LNBITS_DATA_FOLDER
+    #           to use PostgreSQL, specify LNBITS_DATABASE_URL=postgres://...
+    #           to use CockroachDB, specify LNBITS_DATABASE_URL=cockroachdb://...
+    # for both PostgreSQL and CockroachDB, you'll need to install
+    #   psycopg2 as an additional dependency
+    LNBITS_DATA_FOLDER="/app/lnbits/data"
+    # LNBITS_DATABASE_URL="postgres://user:password@host:port/databasename"
+
+    LNBITS_FORCE_HTTPS=true
+    LNBITS_SERVICE_FEE="0.0"
+
+    # Change theme
+    LNBITS_SITE_TITLE="LNbits"
+    LNBITS_SITE_TAGLINE="free and open-source lightning wallet"
+    LNBITS_SITE_DESCRIPTION="Some description about your service, will display if title is not 'LNbits'"
+    # Choose from mint, flamingo, salvador, autumn, monochrome, classic
+    LNBITS_THEME_OPTIONS="classic, bitcoin, flamingo, mint, autumn, monochrome, salvador"
+
+    # Choose from LNPayWallet, OpenNodeWallet, LntxbotWallet,
+    #             LndRestWallet, CLightningWallet, LNbitsWallet, SparkWallet, FakeWallet
+    LNBITS_BACKEND_WALLET_CLASS=LndRestWallet
+    # VoidWallet is just a fallback that works without any actual Lightning capabilities,
+    # just so you can see the UI before dealing with this file.
+
+    # Set one of these blocks depending on the wallet kind you chose above:
+    # SparkWallet
+    SPARK_URL=http://localhost:9737/rpc
+    SPARK_TOKEN=myaccesstoken
+
+    # CLightningWallet
+    CLIGHTNING_RPC="/home/bob/.lightning/bitcoin/lightning-rpc"
+
+    # LnbitsWallet
+    LNBITS_ENDPOINT=https://legend.lnbits.com
+    LNBITS_KEY=LNBITS_ADMIN_KEY
+
+    # LndRestWallet
+    LND_REST_ENDPOINT=https://lnd-node-service:8080/
+    LND_REST_CERT="/app/lnbits/lnd/tls.cert"
+    LND_REST_MACAROON="/app/lnbits/lnd/data/chain/bitcoin/regtest/admin.macaroon"
+
+    LND_GRPC_ENDPOINT=lnd-node-service
+    LND_GRPC_PORT=10009
+    LND_CERT='/app/lnbits/lnd/tls.cert'
+    LND_ADMIN_MACAROON='/app/lnbits/lnd/data/chain/bitcoin/regtest/admin.macaroon'
+    LND_INVOICE_MACAROON='/app/lnbits/lnd/data/chain/bitcoin/regtest/invoice.macaroon'
+    LND_READ_MACAROON='/app/lnbits/lnd/data/chain/bitcoin/regtest/readonly.macaroon'
+
+
+    # To use an AES-encrypted macaroon, set
+    # LND_REST_MACAROON_ENCRYPTED="eNcRyPtEdMaCaRoOn"
+
+    # LNPayWallet
+    LNPAY_API_ENDPOINT=https://api.lnpay.co/v1/
+    # Secret API Key under developers tab
+    LNPAY_API_KEY=LNPAY_API_KEY
+    # Wallet Admin in Wallet Access Keys
+    LNPAY_WALLET_KEY=LNPAY_ADMIN_KEY
+
+    # LntxbotWallet
+    LNTXBOT_API_ENDPOINT=https://lntxbot.com/
+    LNTXBOT_KEY=LNTXBOT_ADMIN_KEY
+
+    # OpenNodeWallet
+    OPENNODE_API_ENDPOINT=https://api.opennode.com/
+    OPENNODE_KEY=OPENNODE_ADMIN_KEY
+
+    # FakeWallet
+    FAKE_WALLET_SECRET="ToTheMoon1"
+    LNBITS_DENOMINATION=sats
+
+
+---
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lnbits
+  labels:
+    app: lnbits
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: lnbits
+  template:
+    metadata:
+      labels:
+        app: lnbits
+    spec:
+
+      volumes:
+      - name: lnbits-data
+        emptyDir: {}
+      - name: lnbits-conf
+        configMap:
+          name: lnbits-conf
+      - name: lnd-pv-storage
+        persistentVolumeClaim:
+          claimName: lnd-pvc
+
+      initContainers:
+      - name: config
+        image: busybox
+        command: ['sh', '-c', 'chown -R 1000 /conf']
+        volumeMounts:
+          - name: lnd-pv-storage
+            mountPath: /conf
+
+      containers:
+      - name: lnbits
+        image: agustincharry/lnbits:0.3-beta
+        ports:
+        - containerPort: 5000
+
+        volumeMounts:
+        - name: lnbits-data
+          mountPath: "/app/lnbits/data"
+        - name: lnbits-conf
+          mountPath: "/app/lnbits/.env"
+          subPath: ".env"
+        - name: lnd-pv-storage
+          mountPath: "/app/lnbits/lnd"
+
+
+
+---
+
+#-----------------------------------------SERVICE------------------------------
+#
+# Used to expose DNS and ports.
+#
+# Expose these endpoints
+# lnbits-service
+#
+apiVersion: v1
+kind: Service
+metadata:
+  name: lnbits-service
+spec:
+  type: NodePort
+  selector:
+    app: lnbits
+  ports:
+    - name: lnbits
+      protocol: TCP
+      port: 5000
+      targetPort: 5000
+      nodePort: 30500
